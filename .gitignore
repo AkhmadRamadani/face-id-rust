@@ -1,0 +1,26 @@
+# --- Rust Build Artifacts ---
+/target/
+**/*.rs.bk
+*.rs.bk
+
+# --- IDE & Editor Files ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+.env
+.env.*
+
+# --- Local Models & Large Downloaded Binaries ---
+# Keep models directory structure or downloaded binaries out of version control if fetched dynamically
+# models/*.onnx
+# models/*.tflite
+
+# --- Local Registry Snapshot & Log Files ---
+registry.json
+*.log
+
+# --- Cargo Lock (only un-comment if this is a pure library, keep tracked for binary) ---
+# Cargo.lock

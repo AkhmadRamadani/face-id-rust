@@ -1,0 +1,38 @@
+services:
+  faceid:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Set to aarch64-unknown-linux-gnu when targeting ARM64 hosts
+        LITERT_TARGET: x86_64-unknown-linux-gnu
+    image: faceid-server:latest
+    container_name: faceid-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Persist the face registry across container restarts
+      - faceid-registry:/app/data
+      # Optional: override models without rebuilding the image
+      # - ./models:/app/models:ro
+    environment:
+      # Rust log level: error | warn | info | debug | trace
+      RUST_LOG: "faceid_server=info,tower_http=warn"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # Limit resource usage on production hosts
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+volumes:
+  faceid-registry:
+    driver: local

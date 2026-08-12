@@ -1,0 +1,72 @@
+[package]
+name = "faceid"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "On-device face recognition: LiteRT (GPU) detection + anti-spoofing, pluggable ONNX/LiteRT embedding, Kiddo-backed scoped recognition."
+license = "Apache-2.0"
+
+[dependencies]
+# --- Vector search (always required — this is how recognition works) ---
+# f32 coordinates, u32 item ids (see MutableKdTree alias) -> smallest practical footprint.
+kiddo = "6.0.0"
+
+# --- Image decode/resize. jpeg+png only: this is a face-recognition engine, not a
+# general image toolkit, so we don't pull in gif/tiff/webp/etc decoders we won't use. ---
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+# --- Error handling ---
+thiserror = "2"
+
+# --- Persistence (registry snapshot save/load) ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# serde's derive only covers arrays up to length 32; EMBED_DIM (512 by
+# default) needs this to (de)serialize the embedding array inline.
+serde-big-array = "0.5"
+
+# --- LiteRT backend: YuNet detector + MiniFASNetV2 anti-spoofing + optional LiteRT embedder ---
+litert = { version = "0.2", optional = true }
+
+# --- ONNX Runtime backend: pluggable embedding model ---
+# default-features off: we don't use ndarray (flat Vec<f32> + shape tuples instead) and don't
+# need tls-native (no networked model fetching in production). Trims the dependency closure.
+ort = { version = "2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "download-binaries",
+    "tracing",
+    "tls-rustls",
+], optional = true }
+
+# --- Web API server ---
+axum = { version = "0.7", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+utoipa = { version = "4", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "7", features = ["axum"] }
+
+[features]
+default = ["litert-runtime", "ort-runtime"]
+# Detector (YuNet) and anti-spoofing (MiniFASNetV2) are LiteRT-only per spec, and the LiteRT
+# embedder backend also lives behind this flag.
+litert-runtime = ["dep:litert"]
+# ONNX Runtime embedder backend.
+ort-runtime = ["dep:ort"]
+
+[[bin]]
+name = "faceid-server"
+path = "src/bin/server.rs"
+required-features = ["litert-runtime"]
+
+[build-dependencies]
+dirs = "5"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
