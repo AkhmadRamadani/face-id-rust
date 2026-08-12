@@ -5,8 +5,10 @@
 # ──────────────────────────────────────────────────────────────
 FROM rust:1.89-slim-bookworm AS builder
 
-# Build-time dependencies
+# Build-time dependencies (build-essential & g++ provide libstdc++)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    g++ \
     pkg-config \
     libssl-dev \
     ca-certificates \
@@ -40,18 +42,18 @@ RUN cargo build --release --bin faceid-server --locked && \
 # ──────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
 
-# Runtime C++ standard library (required by LiteRT GPU delegate)
+# Runtime C++ standard library & curl for healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libstdc++6 \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# LiteRT Linux shared libraries (downloaded by litert-sys build script)
-# Path inside the builder container: ~/.cache/litert-sys/v0.10.2/<target>/
-ARG LITERT_TARGET=x86_64-unknown-linux-gnu
-COPY --from=builder \
-    /root/.cache/litert-sys/v0.10.2/${LITERT_TARGET}/ \
-    /usr/local/lib/litert/
+# Copy LiteRT Linux shared libraries dynamically regardless of target architecture (x86_64 vs aarch64)
+COPY --from=builder /root/.cache/litert-sys/v0.10.2/ /tmp/litert-cache/
+RUN mkdir -p /usr/local/lib/litert && \
+    cp -rn /tmp/litert-cache/*/* /usr/local/lib/litert/ 2>/dev/null || true && \
+    rm -rf /tmp/litert-cache
 
 # The compiled server binary
 COPY --from=builder /app/target/release/faceid-server /usr/local/bin/faceid-server
