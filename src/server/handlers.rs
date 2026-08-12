@@ -106,10 +106,7 @@ pub async fn health_check(
 }
 
 fn parse_bool_str(s: &str) -> bool {
-    match s.trim().to_lowercase().as_str() {
-        "false" | "0" | "inactive" | "no" | "off" => false,
-        _ => true,
-    }
+    !matches!(s.trim().to_lowercase().as_str(), "false" | "0" | "inactive" | "no" | "off")
 }
 
 #[derive(ToSchema)]
@@ -333,7 +330,7 @@ pub async fn identify_face(
     };
 
     match match_opt {
-        Some(m) if threshold_raw.map_or(true, |t| m.similarity >= t) => Ok(Json(IdentifyResponse {
+        Some(m) if threshold_raw.is_none_or(|t| m.similarity >= t) => Ok(Json(IdentifyResponse {
             matched: true,
             match_result: Some(MatchInfo {
                 record_id: m.record_id,
