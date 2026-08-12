@@ -6,7 +6,7 @@
 //!     --detector models/yunet_fp16.tflite \
 //!     --antispoof models/silentface.tflite \
 //!     --embedder models/embedder.onnx \
-//!     --registry registry.json \
+//!     --registry registry.jsonl \
 //!     --person alice \
 //!     --photo alice.jpg \
 //!     --scope global
@@ -32,8 +32,8 @@ struct Args {
     /// Path to the embedding .onnx export.
     #[arg(long)]
     embedder: std::path::PathBuf,
-    /// Registry snapshot to load (if present) and save back to.
-    #[arg(long, default_value = "registry.json")]
+    /// Registry snapshot to load (if present) and append to.
+    #[arg(long, default_value = "registry.jsonl")]
     registry: std::path::PathBuf,
     /// Stable identifier for the person being enrolled.
     #[arg(long)]
@@ -99,7 +99,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let image = load_image(&args.photo)?;
     let record_id = pipeline.enroll(&image, PersonId::from(args.person.as_str()), scope, args.label)?;
 
-    persistence::save(pipeline.store(), &args.registry)?;
+    if let Some(record) = pipeline.store().record(record_id) {
+        persistence::append_record(record, &args.registry)?;
+    }
+
     println!(
         "Registered '{}' as record #{record_id} ({} total registrations in the store)",
         args.person,

@@ -31,8 +31,8 @@ struct Args {
     #[arg(long, default_value = "models/facenet512.tflite")]
     embedder: PathBuf,
 
-    /// Path to registry snapshot file.
-    #[arg(long, default_value = "registry.json")]
+    /// Path to registry file (.jsonl format).
+    #[arg(long, default_value = "registry.jsonl")]
     registry: PathBuf,
 
     /// Default minimum similarity threshold for recognition.

@@ -6,7 +6,7 @@
 //!     --detector models/yunet_fp16.tflite \
 //!     --antispoof models/silentface.tflite \
 //!     --embedder models/embedder.onnx \
-//!     --registry registry.json \
+//!     --registry registry.jsonl \
 //!     --photo unknown.jpg \
 //!     --event expo-2026
 //! ```
@@ -26,7 +26,7 @@ struct Args {
     antispoof: Option<std::path::PathBuf>,
     #[arg(long)]
     embedder: std::path::PathBuf,
-    #[arg(long, default_value = "registry.json")]
+    #[arg(long, default_value = "registry.jsonl")]
     registry: std::path::PathBuf,
     #[arg(long)]
     photo: std::path::PathBuf,

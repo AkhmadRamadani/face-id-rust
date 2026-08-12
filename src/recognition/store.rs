@@ -1,23 +1,15 @@
-//! The face registry itself: one global [`MutableKdTree`] plus one per
+//! The face registry itself: one global [`Voyager`] HNSW index plus one per
 //! event, all searched together according to a [`RecognitionContext`].
 //!
-//! **Memory note:** each registered embedding is currently stored twice —
-//! once inside the relevant Kiddo tree (which needs the raw point to support
-//! `remove`), and once in `records` (needed to answer `remove` and to
-//! rebuild trees on load). At 512 dims that's ~2KB/record x2. For registries
-//! in the thousands this is a non-issue; if you're pushing into the
-//! hundreds of thousands, consider periodically freezing settled scopes
-//! (e.g. a finished event) into an [`kiddo::ImmutableKdTree`] + on-disk rkyv
-//! snapshot and dropping them from live `VectorStore`, per Kiddo's own
-//! guidance that heavy-churn `MutableKdTree` workloads benefit from
-//! periodic rebuilds.
+//! **Memory note:** each registered embedding is stored in the Voyager HNSW index
+//! and in `records` (needed for payload queries, persistence, and tombstone filtering
+//! on unregister).
 
 use std::collections::HashMap;
-use std::num::NonZero;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kiddo::{MutableKdTree, SquaredEuclidean};
 use serde::{Deserialize, Serialize};
+use voyager_rs::Voyager;
 
 use crate::error::{FaceError, Result};
 use crate::types::{squared_dist_to_cosine, Embedding, EMBED_DIM};
@@ -63,12 +55,27 @@ pub struct MatchResult {
     pub label: Option<String>,
 }
 
-type Tree = MutableKdTree<f32, EMBED_DIM>;
+pub struct VoyagerIndex {
+    inner: Voyager<EMBED_DIM>,
+    count: usize,
+}
+
+impl Default for VoyagerIndex {
+    fn default() -> Self {
+        Self {
+            inner: Voyager::new(),
+            count: 0,
+        }
+    }
+}
+
+unsafe impl Send for VoyagerIndex {}
+unsafe impl Sync for VoyagerIndex {}
 
 #[derive(Default)]
 pub struct VectorStore {
-    global_tree: Tree,
-    event_trees: HashMap<EventId, Tree>,
+    global_tree: VoyagerIndex,
+    event_trees: HashMap<EventId, VoyagerIndex>,
     records: HashMap<RecordId, Record>,
     next_id: RecordId,
 }
@@ -104,16 +111,13 @@ impl VectorStore {
         let point = *embedding.as_array();
         match &scope {
             RegistrationScope::Global => {
-                self.global_tree
-                    .add(&point, id)
-                    .map_err(|e| FaceError::Construction(e.to_string()))?;
+                self.global_tree.inner.add_item(point, Some(id));
+                self.global_tree.count += 1;
             }
             RegistrationScope::Event(event_id) => {
-                self.event_trees
-                    .entry(event_id.clone())
-                    .or_default()
-                    .add(&point, id)
-                    .map_err(|e| FaceError::Construction(e.to_string()))?;
+                let tree = self.event_trees.entry(event_id.clone()).or_default();
+                tree.inner.add_item(point, Some(id));
+                tree.count += 1;
             }
         }
 
@@ -139,12 +143,17 @@ impl VectorStore {
             .records
             .remove(&record_id)
             .ok_or(FaceError::RecordNotFound(record_id))?;
-        let point = *record.embedding.as_array();
         match &record.scope {
-            RegistrationScope::Global => self.global_tree.remove(&point, record_id),
+            RegistrationScope::Global => {
+                if self.global_tree.count > 0 {
+                    self.global_tree.count -= 1;
+                }
+            }
             RegistrationScope::Event(event_id) => {
                 if let Some(tree) = self.event_trees.get_mut(event_id) {
-                    tree.remove(&point, record_id);
+                    if tree.count > 0 {
+                        tree.count -= 1;
+                    }
                 }
             }
         }
@@ -181,13 +190,13 @@ impl VectorStore {
     ) -> Option<MatchResult> {
         let mut best: Option<(RecordId, f32, MatchOrigin)> = None;
 
-        if let Some((id, sim)) = nearest_in(&self.global_tree, probe) {
+        if let Some((id, sim)) = nearest_in(&self.global_tree, probe, &self.records) {
             best = Some((id, sim, MatchOrigin::Global));
         }
 
         if let Some(event_id) = context.event() {
             if let Some(tree) = self.event_trees.get(event_id) {
-                if let Some((id, sim)) = nearest_in(tree, probe) {
+                if let Some((id, sim)) = nearest_in(tree, probe, &self.records) {
                     let better = best.as_ref().map(|(_, b, _)| sim > *b).unwrap_or(true);
                     if better {
                         best = Some((id, sim, MatchOrigin::Event(event_id.clone())));
@@ -216,12 +225,12 @@ impl VectorStore {
     /// borderline matches instead of a hard accept/reject.
     pub fn identify_top_k(&self, probe: &Embedding, context: &RecognitionContext, k: usize) -> Vec<MatchResult> {
         let mut all: Vec<(RecordId, f32, MatchOrigin)> = Vec::new();
-        if let Some(hits) = nearest_n_in(&self.global_tree, probe, k) {
+        if let Some(hits) = nearest_n_in(&self.global_tree, probe, k, &self.records) {
             all.extend(hits.into_iter().map(|(id, sim)| (id, sim, MatchOrigin::Global)));
         }
         if let Some(event_id) = context.event() {
             if let Some(tree) = self.event_trees.get(event_id) {
-                if let Some(hits) = nearest_n_in(tree, probe, k) {
+                if let Some(hits) = nearest_n_in(tree, probe, k, &self.records) {
                     all.extend(
                         hits.into_iter()
                             .map(|(id, sim)| (id, sim, MatchOrigin::Event(event_id.clone()))),
@@ -257,47 +266,75 @@ impl VectorStore {
         self.records.values()
     }
 
-    /// Rebuilds a store from a flat list of records (used by
-    /// [`super::persistence`] on load). Skips — rather than fails on — a
-    /// record whose tree insertion errors, since a single corrupt point
-    /// shouldn't prevent the rest of the registry from loading; count the
-    /// return value against `records.len()` if you want to detect that.
-    pub(crate) fn rebuild_from_records(records: Vec<Record>) -> Self {
-        let mut store = Self::new();
-        let mut max_id = 0u32;
-        for record in records {
-            max_id = max_id.max(record.id);
-            let point = *record.embedding.as_array();
-            let insert = match &record.scope {
-                RegistrationScope::Global => store.global_tree.add(&point, record.id),
-                RegistrationScope::Event(event_id) => {
-                    store.event_trees.entry(event_id.clone()).or_default().add(&point, record.id)
-                }
-            };
-            if insert.is_ok() {
-                store.records.insert(record.id, record);
+    /// Inserts a pre-existing record directly into the store and index.
+    pub fn insert_record(&mut self, record: Record) {
+        self.next_id = self.next_id.max(record.id.saturating_add(1));
+        let point = *record.embedding.as_array();
+        match &record.scope {
+            RegistrationScope::Global => {
+                self.global_tree.inner.add_item(point, Some(record.id));
+                self.global_tree.count += 1;
+            }
+            RegistrationScope::Event(event_id) => {
+                let tree = self.event_trees.entry(event_id.clone()).or_default();
+                tree.inner.add_item(point, Some(record.id));
+                tree.count += 1;
             }
         }
-        store.next_id = max_id.saturating_add(1);
+        self.records.insert(record.id, record);
+    }
+
+    /// Rebuilds a store from a flat list of records.
+    pub fn rebuild_from_records(records: Vec<Record>) -> Self {
+        let mut store = Self::new();
+        for record in records {
+            store.insert_record(record);
+        }
         store
     }
 }
 
-fn nearest_in(tree: &Tree, probe: &Embedding) -> Option<(RecordId, f32)> {
-    if tree.size() == 0 {
+fn nearest_in(tree: &VoyagerIndex, probe: &Embedding, records: &HashMap<RecordId, Record>) -> Option<(RecordId, f32)> {
+    if tree.count == 0 {
         return None;
     }
-    let hit = tree.query(probe.as_array()).nearest_one::<SquaredEuclidean<f32>>().execute();
-    Some((hit.item, squared_dist_to_cosine(hit.distance)))
+    let k = (tree.count.min(10)) as i32;
+    let (ids, distances) = tree.inner.query(*probe.as_array(), k, None);
+    for (id_idx, dist) in ids.into_iter().zip(distances.into_iter()) {
+        let rec_id = id_idx as RecordId;
+        if records.contains_key(&rec_id) {
+            return Some((rec_id, squared_dist_to_cosine(dist)));
+        }
+    }
+    None
 }
 
-fn nearest_n_in(tree: &Tree, probe: &Embedding, k: usize) -> Option<Vec<(RecordId, f32)>> {
-    if tree.size() == 0 || k == 0 {
+fn nearest_n_in(
+    tree: &VoyagerIndex,
+    probe: &Embedding,
+    k: usize,
+    records: &HashMap<RecordId, Record>,
+) -> Option<Vec<(RecordId, f32)>> {
+    if tree.count == 0 || k == 0 {
         return None;
     }
-    let k = NonZero::new(k.min(tree.size()))?;
-    let hits = tree.query(probe.as_array()).nearest_n::<SquaredEuclidean<f32>>(k).execute();
-    Some(hits.into_iter().map(|h| (h.item, squared_dist_to_cosine(h.distance))).collect())
+    let fetch_k = (k * 2).max(tree.count).min(100) as i32;
+    let (ids, distances) = tree.inner.query(*probe.as_array(), fetch_k, None);
+    let mut hits = Vec::new();
+    for (id_idx, dist) in ids.into_iter().zip(distances.into_iter()) {
+        let rec_id = id_idx as RecordId;
+        if records.contains_key(&rec_id) {
+            hits.push((rec_id, squared_dist_to_cosine(dist)));
+            if hits.len() == k {
+                break;
+            }
+        }
+    }
+    if hits.is_empty() {
+        None
+    } else {
+        Some(hits)
+    }
 }
 
 fn now_unix_ms() -> u64 {
@@ -305,4 +342,59 @@ fn now_unix_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_embedding(val: f32) -> Embedding {
+        let mut arr = [0.0f32; EMBED_DIM];
+        arr[0] = val;
+        let mut emb = Embedding(arr);
+        emb.normalize();
+        emb
+    }
+
+    #[test]
+    fn test_vector_store_voyager() {
+        let mut store = VectorStore::new();
+
+        let alice_emb = dummy_embedding(1.0);
+        let bob_emb = dummy_embedding(-1.0);
+
+        let alice_id = store
+            .register(
+                PersonId("alice".into()),
+                alice_emb.clone(),
+                RegistrationScope::Global,
+                Some("Alice".into()),
+            )
+            .unwrap();
+
+        let bob_id = store
+            .register(
+                PersonId("bob".into()),
+                bob_emb.clone(),
+                RegistrationScope::Event(EventId("expo".into())),
+                Some("Bob".into()),
+            )
+            .unwrap();
+
+        assert_eq!(store.len(), 2);
+
+        // Identify global
+        let match_global = store
+            .identify(&alice_emb, &RecognitionContext::GlobalOnly, 0.5)
+            .unwrap();
+        assert_eq!(match_global.record_id, alice_id);
+        assert_eq!(match_global.person_id.0, "alice");
+
+        // Identify event
+        let match_event = store
+            .identify(&bob_emb, &RecognitionContext::Event(EventId("expo".into())), 0.5)
+            .unwrap();
+        assert_eq!(match_event.record_id, bob_id);
+        assert_eq!(match_event.person_id.0, "bob");
+    }
 }

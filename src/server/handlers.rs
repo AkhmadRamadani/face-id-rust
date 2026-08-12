@@ -207,7 +207,7 @@ pub async fn enroll_face(
         RegistrationScope::Event(scope_raw.as_str().into())
     };
 
-    let (record_id, total_registrations) = {
+    let (record_id, total_registrations, record_opt) = {
         let mut guard = state.inner.lock().await;
         let record_id = guard.pipeline.enroll_opts(
             &image,
@@ -217,10 +217,13 @@ pub async fn enroll_face(
             check_liveness,
         )?;
         let total = guard.pipeline.store().len();
-        (record_id, total)
+        let record = guard.pipeline.store().record(record_id).cloned();
+        (record_id, total, record)
     };
 
-    state.save_registry().await?;
+    if let Some(record) = record_opt {
+        state.append_record_to_registry(&record).await?;
+    }
 
     Ok(Json(EnrollResponse {
         record_id,

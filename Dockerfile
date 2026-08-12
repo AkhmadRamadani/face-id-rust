@@ -87,5 +87,5 @@ CMD [ \
     "--detector", "/app/models/yunet_fp16.tflite", \
     "--antispoof", "/app/models/silentface.tflite", \
     "--embedder", "/app/models/facenet512.tflite", \
-    "--registry", "/app/data/registry.json" \
+    "--registry", "/app/data/registry.jsonl" \
 ]

@@ -3,13 +3,12 @@ name = "faceid"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
-description = "On-device face recognition: LiteRT (GPU) detection + anti-spoofing, pluggable ONNX/LiteRT embedding, Kiddo-backed scoped recognition."
+description = "On-device face recognition: LiteRT (GPU) detection + anti-spoofing, pluggable ONNX/LiteRT embedding, Voyager-backed scoped recognition."
 license = "Apache-2.0"
 
 [dependencies]
-# --- Vector search (always required — this is how recognition works) ---
-# f32 coordinates, u32 item ids (see MutableKdTree alias) -> smallest practical footprint.
-kiddo = "6.0.0"
+# --- Vector search (Spotify Voyager HNSW index) ---
+voyager_rs = { git = "https://github.com/uzushino/voyager-rs" }
 
 # --- Image decode/resize. jpeg+png only: this is a face-recognition engine, not a
 # general image toolkit, so we don't pull in gif/tiff/webp/etc decoders we won't use. ---

@@ -61,7 +61,7 @@ cargo run --bin faceid-server -- \
     --detector models/yunet_fp16.tflite \
     --antispoof models/silentface.tflite \
     --embedder models/facenet512.tflite \
-    --registry registry.json
+    --registry registry.jsonl
 ```
 
 ### Swagger UI & Interactive Docs

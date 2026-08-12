@@ -33,11 +33,20 @@ impl AppState {
         }
     }
 
-    /// Automatically flushes current vector store to registry JSON file if auto_save is enabled.
+    /// Automatically flushes current vector store to registry JSON Lines file if auto_save is enabled.
     pub async fn save_registry(&self) -> Result<()> {
         let guard = self.inner.lock().await;
         if guard.auto_save {
             persistence::save(guard.pipeline.store(), &guard.registry_path)?;
+        }
+        Ok(())
+    }
+
+    /// Appends a single record to the registry JSON Lines file in O(1) time if auto_save is enabled.
+    pub async fn append_record_to_registry(&self, record: &crate::recognition::Record) -> Result<()> {
+        let guard = self.inner.lock().await;
+        if guard.auto_save {
+            persistence::append_record(record, &guard.registry_path)?;
         }
         Ok(())
     }

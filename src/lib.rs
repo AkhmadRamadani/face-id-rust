@@ -4,7 +4,7 @@
 //! [`LivenessDetector`] (MiniFASNetV2 anti-spoofing) run on the LiteRT GPU
 //! delegate; [`Embedder`] is a pluggable trait with an ONNX Runtime backend
 //! ([`OrtEmbedder`]) and a LiteRT backend ([`LiteRtEmbedder`]); recognition
-//! is backed by [`kiddo`]'s k-d tree, scoped globally or per-event (see
+//! is backed by Spotify's [`voyager`] HNSW index, scoped globally or per-event (see
 //! [`recognition`]).
 //!
 //! ## Pipeline
@@ -14,7 +14,7 @@
 //!       -> liveness (optional)   -> reject presentation attacks
 //!       -> align (5-pt warp)     -> AlignedFace (canonical pose, fixed size)
 //!       -> embed (ORT or LiteRT) -> Embedding ([f32; EMBED_DIM], L2-normalized)
-//!       -> register / identify  -> VectorStore (global + per-event Kiddo trees)
+//!       -> register / identify  -> VectorStore (global + per-event Voyager trees)
 //! ```
 //!
 //! [`FacePipeline`] drives all of this for you; the individual stages
