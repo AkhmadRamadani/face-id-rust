@@ -166,15 +166,50 @@ impl<E: Embedder> FacePipeline<E> {
     }
 }
 
-/// Loads a decodable image file (jpeg/png) from disk as RGB8. Standalone
-/// (not tied to `FacePipeline<E>`'s generic parameter) so callers don't need
-/// a turbofish just to load a photo, and don't need a direct `image` crate
-/// dependency of their own.
-pub fn load_image(path: impl AsRef<std::path::Path>) -> Result<RgbImage> {
-    Ok(image::open(path)?.into_rgb8())
+fn auto_orient(img: image::DynamicImage, orientation: u32) -> image::DynamicImage {
+    match orientation {
+        2 => img.fliph(),
+        3 => img.rotate180(),
+        4 => img.flipv(),
+        5 => img.rotate90().fliph(),
+        6 => img.rotate90(),
+        7 => img.rotate270().fliph(),
+        8 => img.rotate270(),
+        _ => img,
+    }
 }
 
-/// Decodes an image from in-memory raw bytes (e.g. from an HTTP multipart payload) as RGB8.
+/// Loads a decodable image file (jpeg/png) from disk as RGB8, automatically
+/// applying EXIF orientation transforms (e.g. portrait photos taken on mobile cameras).
+pub fn load_image(path: impl AsRef<std::path::Path>) -> Result<RgbImage> {
+    let path_ref = path.as_ref();
+    let file = std::fs::File::open(path_ref)?;
+    let mut reader = std::io::BufReader::new(file);
+
+    let orientation = exif::Reader::new()
+        .read_from_container(&mut reader)
+        .ok()
+        .and_then(|exif| exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY).cloned())
+        .and_then(|field| field.value.get_uint(0))
+        .unwrap_or(1);
+
+    let raw_img = image::open(path_ref)?;
+    let oriented_img = auto_orient(raw_img, orientation);
+    Ok(oriented_img.into_rgb8())
+}
+
+/// Decodes an image from in-memory raw bytes (e.g. from an HTTP multipart payload) as RGB8,
+/// automatically applying EXIF orientation transforms.
 pub fn load_image_from_bytes(bytes: &[u8]) -> Result<RgbImage> {
-    Ok(image::load_from_memory(bytes)?.into_rgb8())
+    let mut cursor = std::io::Cursor::new(bytes);
+    let orientation = exif::Reader::new()
+        .read_from_container(&mut cursor)
+        .ok()
+        .and_then(|exif| exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY).cloned())
+        .and_then(|field| field.value.get_uint(0))
+        .unwrap_or(1);
+
+    let raw_img = image::load_from_memory(bytes)?;
+    let oriented_img = auto_orient(raw_img, orientation);
+    Ok(oriented_img.into_rgb8())
 }

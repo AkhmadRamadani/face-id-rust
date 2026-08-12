@@ -24,3 +24,5 @@ registry.json
 
 # --- Cargo Lock (only un-comment if this is a pure library, keep tracked for binary) ---
 # Cargo.lock
+
+test

@@ -13,9 +13,11 @@ voyager_rs = { git = "https://github.com/uzushino/voyager-rs" }
 # --- Image decode/resize. jpeg+png only: this is a face-recognition engine, not a
 # general image toolkit, so we don't pull in gif/tiff/webp/etc decoders we won't use. ---
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+kamadak-exif = "0.5"
 
-# --- Error handling ---
+# --- Error handling & System metrics ---
 thiserror = "2"
+libc = "0.2"
 
 # --- Persistence (registry snapshot save/load) ---
 serde = { version = "1", features = ["derive"] }

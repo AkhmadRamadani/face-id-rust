@@ -49,6 +49,8 @@ pub mod types;
 #[cfg(feature = "litert-runtime")]
 pub mod antispoof;
 #[cfg(feature = "litert-runtime")]
+pub mod blazeface;
+#[cfg(feature = "litert-runtime")]
 pub mod detector;
 #[cfg(feature = "litert-runtime")]
 mod litert_backend;
@@ -59,6 +61,8 @@ mod litert_backend;
 // `ort-runtime` still gets you `Embedder`/`OrtEmbedder` directly; you'd just
 // drive detect/align/embed/recognize yourself instead of through
 // `FacePipeline`.
+#[cfg(feature = "litert-runtime")]
+pub mod landmarker;
 #[cfg(feature = "litert-runtime")]
 pub mod pipeline;
 #[cfg(feature = "litert-runtime")]
@@ -75,7 +79,11 @@ pub use embedder::{Embedder, EmbedderConfig};
 #[cfg(feature = "litert-runtime")]
 pub use antispoof::{AntiSpoofConfig, LivenessDetector};
 #[cfg(feature = "litert-runtime")]
+pub use blazeface::{BlazeFaceConfig, BlazeFaceDetector};
+#[cfg(feature = "litert-runtime")]
 pub use detector::{DetectorConfig, FaceDetector};
+#[cfg(feature = "litert-runtime")]
+pub use landmarker::{FACEMESH_FACE_OVAL, FaceLandmarker};
 #[cfg(feature = "litert-runtime")]
 pub use pipeline::{load_image, load_image_from_bytes, FacePipeline};
 #[cfg(feature = "litert-runtime")]
