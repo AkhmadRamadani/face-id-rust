@@ -17,31 +17,20 @@ env:
 
 jobs:
   # ──────────────────────────────────────────────────────────────
-  # Job 1: Lint, Check & Run Unit Tests (inside Rust Docker container)
+  # Job 1: Lint, Check & Run Unit Tests (Ubuntu 24.04 LTS / glibc 2.39)
   # ──────────────────────────────────────────────────────────────
   test_and_lint:
     name: Lint & Test
-    runs-on: ubuntu-latest
-    container:
-      image: rust:1.89-slim-bookworm
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Install build dependencies
-        run: |
-          apt-get update && apt-get install -y --no-install-recommends \
-            build-essential \
-            g++ \
-            pkg-config \
-            libssl-dev \
-            ca-certificates \
-            curl \
-            git
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Clippy
-        run: rustup component add clippy
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Enable Rust caching
         uses: Swatinem/rust-cache@v2
@@ -63,7 +52,7 @@ jobs:
   docker_build:
     name: Build & Push Docker Image
     needs: test_and_lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository

@@ -1,11 +1,15 @@
 # ──────────────────────────────────────────────────────────────
 # Stage 1 — Builder
-# Uses official Rust image. litert-sys build script will download
-# the Linux .so files from crates.io into ~/.cache/litert-sys/
+# Uses Ubuntu 24.04 LTS (glibc 2.39 / GCC 13) for full compatibility
+# with prebuilt ORT and LiteRT C++ shared libraries.
 # ──────────────────────────────────────────────────────────────
-FROM rust:1.89-slim-bookworm AS builder
+FROM ubuntu:24.04 AS builder
 
-# Build-time dependencies (build-essential & g++ provide libstdc++)
+ENV DEBIAN_FRONTEND=noninteractive
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     g++ \
@@ -13,12 +17,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     ca-certificates \
     curl \
+    git \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Cache dependency layer — copy manifests first so cargo fetch is cached
-# unless Cargo.toml / Cargo.lock change.
 COPY Cargo.toml Cargo.lock build.rs ./
 
 # Create a dummy lib.rs and server binary so `cargo fetch` resolves all deps
@@ -32,17 +37,16 @@ RUN mkdir -p src/server src/bin src/embedder && \
 COPY src ./src
 
 RUN cargo build --release --bin faceid-server --locked && \
-    # Strip RPATH from the binary; we will set LD_LIBRARY_PATH at runtime
     objcopy --strip-debug target/release/faceid-server 2>/dev/null || true
 
 # ──────────────────────────────────────────────────────────────
 # Stage 2 — Runtime image
-# Minimal Debian Bookworm image: only copies the binary,
-# LiteRT shared libs, and model files.
+# Minimal Ubuntu 24.04 LTS base with runtime C++ / glibc 2.39.
 # ──────────────────────────────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
+FROM ubuntu:24.04 AS runtime
 
-# Runtime C++ standard library & curl for healthcheck
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libstdc++6 \
     ca-certificates \
