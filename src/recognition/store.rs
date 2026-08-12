@@ -300,7 +300,7 @@ fn nearest_in(tree: &VoyagerIndex, probe: &Embedding, records: &HashMap<RecordId
     }
     let k = (tree.count.min(10)) as i32;
     let (ids, distances) = tree.inner.query(*probe.as_array(), k, None);
-    for (id_idx, dist) in ids.into_iter().zip(distances.into_iter()) {
+    for (id_idx, dist) in ids.into_iter().zip(distances) {
         let rec_id = id_idx as RecordId;
         if records.contains_key(&rec_id) {
             return Some((rec_id, squared_dist_to_cosine(dist)));
@@ -321,7 +321,7 @@ fn nearest_n_in(
     let fetch_k = (k * 2).max(tree.count).min(100) as i32;
     let (ids, distances) = tree.inner.query(*probe.as_array(), fetch_k, None);
     let mut hits = Vec::new();
-    for (id_idx, dist) in ids.into_iter().zip(distances.into_iter()) {
+    for (id_idx, dist) in ids.into_iter().zip(distances) {
         let rec_id = id_idx as RecordId;
         if records.contains_key(&rec_id) {
             hits.push((rec_id, squared_dist_to_cosine(dist)));
