@@ -78,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // A. YuNet Detector Benchmark
     println!("\nLoading YuNet Detector ({:?})...", yunet_path);
-    let s_before = get_process_stats();
+    let _s_before = get_process_stats();
     let mut yunet = FaceDetector::load(
         yunet_path,
         Accelerators::GPU | Accelerators::CPU,
@@ -107,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // B. BlazeFace Short-Range Benchmark
     println!("\nLoading BlazeFace Short-Range ({:?})...", blazeface_path);
-    let s_before = get_process_stats();
+    let _s_before = get_process_stats();
     let mut blazeface = BlazeFaceDetector::load(
         blazeface_path,
         Accelerators::GPU | Accelerators::CPU,

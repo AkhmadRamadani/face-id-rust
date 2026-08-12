@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::load_image_from_bytes;
+use crate::pipeline::Detector;
 use crate::recognition::{PersonId, RecognitionContext, RecordId, RegistrationScope};
 use crate::server::error::AppError;
 use crate::server::state::AppState;

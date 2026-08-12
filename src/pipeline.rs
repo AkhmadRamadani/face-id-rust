@@ -7,26 +7,58 @@ use image::RgbImage;
 
 use crate::align::align_face;
 use crate::antispoof::LivenessDetector;
+use crate::blazeface::BlazeFaceDetector;
 use crate::detector::FaceDetector;
 use crate::embedder::Embedder;
 use crate::error::Result;
 use crate::recognition::{PersonId, RecognitionContext, RecordId, RegistrationScope, VectorStore};
-use crate::types::LivenessResult;
+use crate::types::{DetectedFace, LivenessResult};
 
-pub struct FacePipeline<E: Embedder> {
-    detector: FaceDetector,
-    /// `None` when anti-spoofing is disabled — the "optional, activated"
-    /// requirement is modeled as "is a `LivenessDetector` present", so
-    /// there's no separate bool to accidentally desync from an actually-loaded
-    /// model.
+pub trait Detector {
+    fn detect_all(&mut self, image: &RgbImage) -> Result<Vec<DetectedFace>>;
+
+    fn detect_exactly_one(&mut self, image: &RgbImage) -> Result<DetectedFace> {
+        let faces = self.detect_all(image)?;
+        match faces.len() {
+            1 => Ok(faces.into_iter().next().unwrap()),
+            0 => Err(crate::FaceError::NoFaceDetected),
+            n => Err(crate::FaceError::AmbiguousFaceCount { count: n }),
+        }
+    }
+
+    fn detect_best(&mut self, image: &RgbImage) -> Result<Option<DetectedFace>> {
+        let mut faces = self.detect_all(image)?;
+        faces.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        Ok(faces.into_iter().next())
+    }
+
+    fn is_fully_accelerated(&self) -> Result<bool> {
+        Ok(true)
+    }
+}
+
+impl Detector for BlazeFaceDetector {
+    fn detect_all(&mut self, image: &RgbImage) -> Result<Vec<DetectedFace>> {
+        self.detect_all(image)
+    }
+}
+
+impl Detector for FaceDetector {
+    fn detect_all(&mut self, image: &RgbImage) -> Result<Vec<DetectedFace>> {
+        self.detect_all(image)
+    }
+}
+
+pub struct FacePipeline<E: Embedder, D: Detector = BlazeFaceDetector> {
+    detector: D,
     antispoof: Option<LivenessDetector>,
     embedder: E,
     store: VectorStore,
     similarity_threshold: f32,
 }
 
-impl<E: Embedder> FacePipeline<E> {
-    pub fn new(detector: FaceDetector, antispoof: Option<LivenessDetector>, embedder: E, similarity_threshold: f32) -> Self {
+impl<E: Embedder, D: Detector> FacePipeline<E, D> {
+    pub fn new(detector: D, antispoof: Option<LivenessDetector>, embedder: E, similarity_threshold: f32) -> Self {
         Self {
             detector,
             antispoof,
@@ -49,7 +81,7 @@ impl<E: Embedder> FacePipeline<E> {
         &mut self.store
     }
 
-    pub fn detector(&self) -> &FaceDetector {
+    pub fn detector(&self) -> &D {
         &self.detector
     }
 
