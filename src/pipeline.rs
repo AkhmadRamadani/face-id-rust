@@ -170,25 +170,26 @@ impl<E: Embedder, D: Detector> FacePipeline<E, D> {
         }
 
         let out_size = self.embedder.input_size();
-        let aligned = if opts.apply_mask && self.landmarker.is_some() {
-            let lm = self.landmarker.as_mut().unwrap();
-            let default_lm = crate::types::Landmarks5::default();
-            let lm_ref = landmarks_opt.as_ref().unwrap_or(&default_lm);
-            let masked = crate::align::crop_mediapipe_two_pass_face(image, &bbox, lm_ref, lm, 0.05)?;
-            let resized = image::imageops::resize(&masked, out_size, out_size, image::imageops::FilterType::Triangle);
-            crate::types::AlignedFace {
-                rgb: resized.into_raw(),
-                width: out_size,
-                height: out_size,
+        let aligned = match (opts.apply_mask, self.landmarker.as_mut(), landmarks_opt.as_ref()) {
+            (true, Some(lm), landmarks_ref) => {
+                let default_lm = crate::types::Landmarks5::default();
+                let lm_ref = landmarks_ref.unwrap_or(&default_lm);
+                let masked = crate::align::crop_mediapipe_two_pass_face(image, &bbox, lm_ref, lm, 0.05)?;
+                let resized = image::imageops::resize(&masked, out_size, out_size, image::imageops::FilterType::Triangle);
+                crate::types::AlignedFace {
+                    rgb: resized.into_raw(),
+                    width: out_size,
+                    height: out_size,
+                }
             }
-        } else if let Some(ref landmarks) = landmarks_opt {
-            align_face(image, landmarks, out_size)
-        } else {
-            let resized = image::imageops::resize(image, out_size, out_size, image::imageops::FilterType::Triangle);
-            crate::types::AlignedFace {
-                rgb: resized.into_raw(),
-                width: out_size,
-                height: out_size,
+            (_, _, Some(landmarks)) => align_face(image, landmarks, out_size),
+            _ => {
+                let resized = image::imageops::resize(image, out_size, out_size, image::imageops::FilterType::Triangle);
+                crate::types::AlignedFace {
+                    rgb: resized.into_raw(),
+                    width: out_size,
+                    height: out_size,
+                }
             }
         };
 
