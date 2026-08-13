@@ -53,7 +53,7 @@ impl BlazeFaceDetector {
         }
 
         let (input_w, input_h, anchors) = {
-            if let Ok(outs) = model.run_f32(&[&vec![0.0; 1 * 192 * 192 * 3]]) {
+            if let Ok(outs) = model.run_f32(&[&vec![0.0; 192 * 192 * 3]]) {
                 let max_anchors = outs.iter().map(|o| o.len()).max().unwrap_or(0);
                 if max_anchors == 2304 * 16 || max_anchors == 2304 {
                     (192, 192, generate_blazeface_full_range_anchors())
@@ -119,8 +119,7 @@ impl BlazeFaceDetector {
         let input_w_f = self.input_w as f32;
         let input_h_f = self.input_h as f32;
 
-        for i in 0..num_anchors {
-            let score_logit = classificators[i];
+        for (i, &score_logit) in classificators.iter().enumerate().take(num_anchors) {
             let score = 1.0 / (1.0 + (-score_logit.clamp(-100.0, 100.0)).exp());
 
             if score < self.config.score_threshold {
