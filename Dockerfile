@@ -84,8 +84,8 @@ ENTRYPOINT ["/usr/local/bin/faceid-server"]
 CMD [ \
     "--host", "0.0.0.0", \
     "--port", "8080", \
-    "--detector", "/app/models/yunet_fp16.tflite", \
-    "--antispoof", "/app/models/silentface.tflite", \
-    "--embedder", "/app/models/facenet512.tflite", \
+    "--detector", "/app/models/blazeface.tflite", \
+    "--landmarker", "/app/models/face_landmark.tflite", \
+    "--embedder", "/app/models/mobilefacenet.tflite", \
     "--registry", "/app/data/registry.jsonl" \
 ]

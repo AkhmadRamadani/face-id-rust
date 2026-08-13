@@ -8,21 +8,18 @@ use litert::Accelerators;
 use crate::embedder::{Embedder, EmbedderConfig};
 use crate::error::{FaceError, Result};
 use crate::litert_backend::LiteRtModel;
-use crate::tensor_prep::aligned_face_to_nchw;
+use crate::tensor_prep::{aligned_face_to_nchw, aligned_face_to_nhwc, TensorLayout};
 use crate::types::{AlignedFace, Embedding};
 
 pub struct LiteRtEmbedder {
     model: LiteRtModel,
     config: EmbedderConfig,
     input_size: u32,
+    layout: TensorLayout,
 }
 
 impl LiteRtEmbedder {
-    /// Loads the embedding `.tflite` export. Unlike the detector/anti-spoof
-    /// models, `Accelerators::GPU | Accelerators::CPU` is a reasonable
-    /// default here — a fallback to CPU for the embedding step doesn't have
-    /// the same fraud-detection implications a silent anti-spoof fallback
-    /// would.
+    /// Loads the embedding `.tflite` export.
     pub fn load(
         path: impl AsRef<std::path::Path>,
         accelerators: Accelerators,
@@ -36,8 +33,14 @@ impl LiteRtEmbedder {
                 got: model.input_count(),
             });
         }
-        let actual_elements = model
-            .input_shape(0)
+        let input_shape = model.input_shape(0);
+        let layout = if input_shape.dims.len() == 4 && *input_shape.dims.last().unwrap_or(&0) == 3 {
+            TensorLayout::Nhwc
+        } else {
+            TensorLayout::Nchw
+        };
+
+        let actual_elements = input_shape
             .dims
             .iter()
             .filter(|&&d| d > 0)
@@ -83,7 +86,6 @@ impl LiteRtEmbedder {
                 got: model.output_count(),
             });
         }
-        // Calculate product of positive output dimensions (e.g. 512 for [-1, 512] or [1, 512]).
         let out_elements = model
             .output_shape(0)
             .dims
@@ -101,6 +103,7 @@ impl LiteRtEmbedder {
             model,
             config,
             input_size,
+            layout,
         })
     }
 
@@ -115,7 +118,10 @@ impl Embedder for LiteRtEmbedder {
     }
 
     fn embed(&mut self, face: &AlignedFace) -> Result<Embedding> {
-        let data = aligned_face_to_nchw(face, &self.config.normalization);
+        let data = match self.layout {
+            TensorLayout::Nchw => aligned_face_to_nchw(face, &self.config.normalization),
+            TensorLayout::Nhwc => aligned_face_to_nhwc(face, &self.config.normalization),
+        };
         let outputs = self.model.run_f32(&[&data])?;
         Embedding::from_raw(&outputs[0])
     }

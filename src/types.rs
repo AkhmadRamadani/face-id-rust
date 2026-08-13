@@ -13,7 +13,7 @@ use serde_big_array::BigArray;
 ///
 /// **Change this to match your embedding model's output size and recompile.**
 /// Common values: 128 (FaceNet), 256/512 (ArcFace, MobileFaceNet, FaceLiVT).
-pub const EMBED_DIM: usize = 512;
+pub const EMBED_DIM: usize = 192;
 
 /// An axis-aligned bounding box in pixel coordinates of the *original*,
 /// un-letterboxed image.

@@ -12,6 +12,12 @@ pub enum ChannelOrder {
     Bgr,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TensorLayout {
+    Nchw,
+    Nhwc,
+}
+
 /// Per-channel normalization applied as `(pixel_u8 as f32 - mean) / std`,
 /// evaluated in `order`'s channel arrangement.
 #[derive(Debug, Clone, Copy)]
@@ -51,6 +57,15 @@ impl Normalization {
             std: [127.5, 127.5, 127.5],
         }
     }
+
+    /// `x / 255` with no channel swap — RGB order range `0.0..1.0`.
+    pub const fn zero_to_one_rgb() -> Self {
+        Normalization {
+            order: ChannelOrder::Rgb,
+            mean: [0.0, 0.0, 0.0],
+            std: [255.0, 255.0, 255.0],
+        }
+    }
 }
 
 /// Converts an [`AlignedFace`]'s raw interleaved RGB bytes into a flat NCHW
@@ -82,6 +97,32 @@ pub fn aligned_face_to_nchw(face: &AlignedFace, norm: &Normalization) -> Vec<f32
     out
 }
 
+/// Converts an [`AlignedFace`]'s raw interleaved RGB bytes into a flat NHWC
+/// `[1,H,W,3]` float32 buffer.
+pub fn aligned_face_to_nhwc(face: &AlignedFace, norm: &Normalization) -> Vec<f32> {
+    let (w, h) = (face.width as usize, face.height as usize);
+    let mut out = vec![0f32; 3 * w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let idx = y * w + x;
+            let base = idx * 3;
+            let (r, g, b) = (
+                face.rgb[base] as f32,
+                face.rgb[base + 1] as f32,
+                face.rgb[base + 2] as f32,
+            );
+            let (c0, c1, c2) = match norm.order {
+                ChannelOrder::Rgb => (r, g, b),
+                ChannelOrder::Bgr => (b, g, r),
+            };
+            out[base] = (c0 - norm.mean[0]) / norm.std[0];
+            out[base + 1] = (c1 - norm.mean[1]) / norm.std[1];
+            out[base + 2] = (c2 - norm.mean[2]) / norm.std[2];
+        }
+    }
+    out
+}
+
 /// Converts an RGB image into a flat NCHW `[1,3,H,W]` float32 buffer.
 pub fn image_to_nchw(img: &RgbImage, norm: &Normalization) -> Vec<f32> {
     let (w, h) = img.dimensions();
@@ -103,4 +144,56 @@ pub fn image_to_nchw(img: &RgbImage, norm: &Normalization) -> Vec<f32> {
         }
     }
     out
+}
+
+/// Converts an RGB image into a flat NHWC `[1,H,W,3]` float32 buffer.
+pub fn image_to_nhwc(img: &RgbImage, norm: &Normalization) -> Vec<f32> {
+    let (w, h) = img.dimensions();
+    let (w, h) = (w as usize, h as usize);
+    let mut out = vec![0f32; 3 * w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let px = img.get_pixel(x as u32, y as u32);
+            let (r, g, b) = (px[0] as f32, px[1] as f32, px[2] as f32);
+            let (c0, c1, c2) = match norm.order {
+                ChannelOrder::Rgb => (r, g, b),
+                ChannelOrder::Bgr => (b, g, r),
+            };
+            let base = (y * w + x) * 3;
+            out[base] = (c0 - norm.mean[0]) / norm.std[0];
+            out[base + 1] = (c1 - norm.mean[1]) / norm.std[1];
+            out[base + 2] = (c2 - norm.mean[2]) / norm.std[2];
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nchw_vs_nhwc_layout() {
+        let face = AlignedFace {
+            rgb: vec![255, 128, 0, 10, 20, 30],
+            width: 2,
+            height: 1,
+        };
+        let norm = Normalization::arcface_rgb();
+
+        let nchw = aligned_face_to_nchw(&face, &norm);
+        let nhwc = aligned_face_to_nhwc(&face, &norm);
+
+        assert_eq!(nchw.len(), 6);
+        assert_eq!(nhwc.len(), 6);
+
+        // NHWC pixel 0: R0, G0, B0
+        assert_eq!(nhwc[0], 1.0); // (255 - 127.5) / 127.5 = 1.0
+        assert!((nhwc[1] - (128.0 - 127.5) / 127.5).abs() < 1e-4);
+        assert_eq!(nhwc[2], -1.0); // (0 - 127.5) / 127.5 = -1.0
+
+        // NCHW layout: Plane R has R0, R1
+        assert_eq!(nchw[0], 1.0);
+        assert!((nchw[1] - (10.0 - 127.5) / 127.5).abs() < 1e-4);
+    }
 }

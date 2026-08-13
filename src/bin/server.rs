@@ -3,8 +3,8 @@ use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use faceid::{
-    config::MemoryProfile, recognition::persistence, AntiSpoofConfig, DetectorConfig, EmbedderConfig,
-    FaceDetector, FacePipeline, LivenessDetector, VectorStore,
+    config::MemoryProfile, recognition::persistence, AntiSpoofConfig, EmbedderConfig,
+    FacePipeline, LivenessDetector, VectorStore,
 };
 use faceid::server::{create_router, AppState};
 
@@ -49,8 +49,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-    tracing::info!("Loading FaceDetector from {:?}", args.detector);
-    let detector = FaceDetector::load(&args.detector, faceid::Accelerators::GPU, DetectorConfig::default())?;
+    tracing::info!("Loading BlazeFaceDetector from {:?}", args.detector);
+    let detector = faceid::BlazeFaceDetector::load(
+        &args.detector,
+        faceid::Accelerators::GPU | faceid::Accelerators::CPU,
+        faceid::BlazeFaceConfig::default(),
+    )?;
 
     let antispoof = if let Some(path) = &args.antispoof {
         tracing::info!("Loading LivenessDetector from {:?}", path);

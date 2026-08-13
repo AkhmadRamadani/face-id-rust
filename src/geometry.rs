@@ -183,6 +183,42 @@ impl SimilarityTransform {
         }
     }
 
+    /// Estimates a 2D similarity transform using ONLY the left and right eyes.
+    /// Guarantees that the line connecting the two eyes is rotated to match the
+    /// angle between the reference eyes (e.g. 100% horizontal alignment).
+    pub fn estimate_eyes_only(left_eye: Point2, right_eye: Point2, dst_left_eye: Point2, dst_right_eye: Point2) -> Self {
+        let src_dx = right_eye[0] - left_eye[0];
+        let src_dy = right_eye[1] - left_eye[1];
+        let src_dist = (src_dx * src_dx + src_dy * src_dy).sqrt();
+
+        let dst_dx = dst_right_eye[0] - dst_left_eye[0];
+        let dst_dy = dst_right_eye[1] - dst_left_eye[1];
+        let dst_dist = (dst_dx * dst_dx + dst_dy * dst_dy).sqrt();
+
+        let scale = if src_dist > 1e-6 { dst_dist / src_dist } else { 1.0 };
+
+        let src_angle = src_dy.atan2(src_dx);
+        let dst_angle = dst_dy.atan2(dst_dx);
+        let delta_angle = dst_angle - src_angle;
+
+        let rotation = rot(delta_angle);
+
+        let src_mid = [(left_eye[0] + right_eye[0]) / 2.0, (left_eye[1] + right_eye[1]) / 2.0];
+        let dst_mid = [(dst_left_eye[0] + dst_right_eye[0]) / 2.0, (dst_left_eye[1] + dst_right_eye[1]) / 2.0];
+
+        let r_src_mid = mat2_vec(rotation, src_mid);
+        let translation = [
+            dst_mid[0] - scale * r_src_mid[0],
+            dst_mid[1] - scale * r_src_mid[1],
+        ];
+
+        SimilarityTransform {
+            scale,
+            rotation,
+            translation,
+        }
+    }
+
     /// Forward map: source-image point -> aligned/template-space point.
     pub fn apply(&self, p: Point2) -> Point2 {
         let rp = mat2_vec(self.rotation, p);
