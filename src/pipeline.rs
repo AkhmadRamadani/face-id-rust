@@ -49,8 +49,31 @@ impl Detector for FaceDetector {
     }
 }
 
+/// Execution options for FacePipeline operations (enroll, identify, verify).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineOptions {
+    /// Whether to perform face detection (default: true).
+    /// If false, face detection is skipped and the input image is assumed to be a pre-cropped face.
+    pub detect_face: bool,
+    /// Whether to perform anti-spoof / liveness check (default: true).
+    pub check_liveness: bool,
+    /// Whether to apply 36-point MediaPipe face oval contour background masking (default: false).
+    pub apply_mask: bool,
+}
+
+impl Default for PipelineOptions {
+    fn default() -> Self {
+        Self {
+            detect_face: true,
+            check_liveness: true,
+            apply_mask: true,
+        }
+    }
+}
+
 pub struct FacePipeline<E: Embedder, D: Detector = BlazeFaceDetector> {
     detector: D,
+    landmarker: Option<FaceLandmarker>,
     antispoof: Option<LivenessDetector>,
     embedder: E,
     store: VectorStore,
@@ -61,11 +84,21 @@ impl<E: Embedder, D: Detector> FacePipeline<E, D> {
     pub fn new(detector: D, antispoof: Option<LivenessDetector>, embedder: E, similarity_threshold: f32) -> Self {
         Self {
             detector,
+            landmarker: None,
             antispoof,
             embedder,
             store: VectorStore::new(),
             similarity_threshold,
         }
+    }
+
+    pub fn with_landmarker(mut self, landmarker: Option<FaceLandmarker>) -> Self {
+        self.landmarker = landmarker;
+        self
+    }
+
+    pub fn set_landmarker(&mut self, landmarker: Option<FaceLandmarker>) {
+        self.landmarker = landmarker;
     }
 
     pub fn with_store(mut self, store: VectorStore) -> Self {
@@ -106,10 +139,81 @@ impl<E: Embedder, D: Detector> FacePipeline<E, D> {
         }
     }
 
+    fn process_image(
+        &mut self,
+        image: &RgbImage,
+        opts: PipelineOptions,
+        detect_mode_single: bool,
+    ) -> Result<Option<crate::types::AlignedFace>> {
+        let (bbox, landmarks_opt) = if opts.detect_face {
+            if detect_mode_single {
+                let face = self.detector.detect_exactly_one(image)?;
+                (face.bbox, Some(face.landmarks))
+            } else {
+                match self.detector.detect_best(image)? {
+                    Some(face) => (face.bbox, Some(face.landmarks)),
+                    None => return Ok(None),
+                }
+            }
+        } else {
+            let bbox = crate::types::BBox {
+                x1: 0.0,
+                y1: 0.0,
+                x2: image.width() as f32,
+                y2: image.height() as f32,
+            };
+            (bbox, None)
+        };
+
+        if opts.check_liveness {
+            self.check_live_if_enabled(image, &bbox)?;
+        }
+
+        let out_size = self.embedder.input_size();
+        let aligned = if opts.apply_mask && self.landmarker.is_some() {
+            let lm = self.landmarker.as_mut().unwrap();
+            let default_lm = crate::types::Landmarks5::default();
+            let lm_ref = landmarks_opt.as_ref().unwrap_or(&default_lm);
+            let masked = crate::align::crop_mediapipe_two_pass_face(image, &bbox, lm_ref, lm, 0.05)?;
+            let resized = image::imageops::resize(&masked, out_size, out_size, image::imageops::FilterType::Triangle);
+            crate::types::AlignedFace {
+                rgb: resized.into_raw(),
+                width: out_size,
+                height: out_size,
+            }
+        } else if let Some(ref landmarks) = landmarks_opt {
+            align_face(image, landmarks, out_size)
+        } else {
+            let resized = image::imageops::resize(image, out_size, out_size, image::imageops::FilterType::Triangle);
+            crate::types::AlignedFace {
+                rgb: resized.into_raw(),
+                width: out_size,
+                height: out_size,
+            }
+        };
+
+        Ok(Some(aligned))
+    }
+
+    /// Full enrollment flow with explicit `PipelineOptions` controlling detection, liveness, and face masking.
+    pub fn enroll_full_opts(
+        &mut self,
+        image: &RgbImage,
+        person_id: impl Into<PersonId>,
+        scope: RegistrationScope,
+        label: Option<String>,
+        opts: PipelineOptions,
+    ) -> Result<RecordId> {
+        let aligned = self
+            .process_image(image, opts, true)?
+            .ok_or(crate::FaceError::NoFaceDetected)?;
+        let embedding = self.embedder.embed(&aligned)?;
+        self.store.register(person_id.into(), embedding, scope, label)
+    }
+
     /// Full enrollment flow: requires exactly one face in `image` (so you
     /// can't silently enroll the wrong person out of a group photo),
-    /// optionally checks liveness, aligns, embeds, and registers under
-    /// `scope`.
+    /// optionally checks liveness, aligns, embeds, and registers under `scope`.
     pub fn enroll(
         &mut self,
         image: &RgbImage,
@@ -117,7 +221,7 @@ impl<E: Embedder, D: Detector> FacePipeline<E, D> {
         scope: RegistrationScope,
         label: Option<String>,
     ) -> Result<RecordId> {
-        self.enroll_opts(image, person_id, scope, label, true)
+        self.enroll_full_opts(image, person_id, scope, label, PipelineOptions::default())
     }
 
     /// Enroll with explicit control over whether liveness/anti-spoof check is performed.
@@ -129,26 +233,42 @@ impl<E: Embedder, D: Detector> FacePipeline<E, D> {
         label: Option<String>,
         check_liveness: bool,
     ) -> Result<RecordId> {
-        let face = self.detector.detect_exactly_one(image)?;
-        if check_liveness {
-            self.check_live_if_enabled(image, &face.bbox)?;
-        }
-        let aligned = align_face(image, &face.landmarks, self.embedder.input_size());
+        self.enroll_full_opts(
+            image,
+            person_id,
+            scope,
+            label,
+            PipelineOptions {
+                check_liveness,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Full identification flow with explicit `PipelineOptions` controlling detection, liveness, and face masking.
+    pub fn identify_full_opts(
+        &mut self,
+        image: &RgbImage,
+        context: &RecognitionContext,
+        opts: PipelineOptions,
+    ) -> Result<Option<crate::recognition::MatchResult>> {
+        let aligned = match self.process_image(image, opts, false)? {
+            Some(a) => a,
+            None => return Ok(None),
+        };
         let embedding = self.embedder.embed(&aligned)?;
-        self.store.register(person_id.into(), embedding, scope, label)
+        Ok(self.store.identify(&embedding, context, self.similarity_threshold))
     }
 
     /// Full identification flow: detects the best face in `image`,
     /// optionally checks liveness, aligns, embeds, and searches the
-    /// registry under `context`. Returns `Ok(None)` if no face was found or
-    /// no registered person cleared the similarity threshold — a "no match"
-    /// is not an error.
+    /// registry under `context`.
     pub fn identify(
         &mut self,
         image: &RgbImage,
         context: &RecognitionContext,
     ) -> Result<Option<crate::recognition::MatchResult>> {
-        self.identify_opts(image, context, true)
+        self.identify_full_opts(image, context, PipelineOptions::default())
     }
 
     /// Identify with explicit control over whether liveness/anti-spoof check is performed.
@@ -158,23 +278,35 @@ impl<E: Embedder, D: Detector> FacePipeline<E, D> {
         context: &RecognitionContext,
         check_liveness: bool,
     ) -> Result<Option<crate::recognition::MatchResult>> {
-        let face = match self.detector.detect_best(image)? {
-            Some(f) => f,
-            None => return Ok(None),
-        };
-        if check_liveness {
-            self.check_live_if_enabled(image, &face.bbox)?;
-        }
-        let aligned = align_face(image, &face.landmarks, self.embedder.input_size());
-        let embedding = self.embedder.embed(&aligned)?;
-        Ok(self.store.identify(&embedding, context, self.similarity_threshold))
+        self.identify_full_opts(
+            image,
+            context,
+            PipelineOptions {
+                check_liveness,
+                ..Default::default()
+            },
+        )
     }
 
-    /// 1:1 verification between two photos (each expected to contain
-    /// exactly one face). Returns a cosine similarity — does not touch the
-    /// registry at all.
+    /// 1:1 verification with explicit `PipelineOptions` controlling detection, liveness, and face masking.
+    pub fn verify_photos_full_opts(
+        &mut self,
+        image_a: &RgbImage,
+        image_b: &RgbImage,
+        opts: PipelineOptions,
+    ) -> Result<f32> {
+        let aligned_a = self
+            .process_image(image_a, opts, true)?
+            .ok_or(crate::FaceError::NoFaceDetected)?;
+        let aligned_b = self
+            .process_image(image_b, opts, true)?
+            .ok_or(crate::FaceError::NoFaceDetected)?;
+        self.embedder.verify(&aligned_a, &aligned_b)
+    }
+
+    /// 1:1 verification between two photos. Returns cosine similarity.
     pub fn verify_photos(&mut self, image_a: &RgbImage, image_b: &RgbImage) -> Result<f32> {
-        self.verify_photos_opts(image_a, image_b, true)
+        self.verify_photos_full_opts(image_a, image_b, PipelineOptions::default())
     }
 
     /// 1:1 verification with explicit control over whether liveness/anti-spoof check is performed.
@@ -184,17 +316,14 @@ impl<E: Embedder, D: Detector> FacePipeline<E, D> {
         image_b: &RgbImage,
         check_liveness: bool,
     ) -> Result<f32> {
-        let face_a = self.detector.detect_exactly_one(image_a)?;
-        let face_b = self.detector.detect_exactly_one(image_b)?;
-        if check_liveness {
-            self.check_live_if_enabled(image_a, &face_a.bbox)?;
-            self.check_live_if_enabled(image_b, &face_b.bbox)?;
-        }
-
-        let size = self.embedder.input_size();
-        let aligned_a = align_face(image_a, &face_a.landmarks, size);
-        let aligned_b = align_face(image_b, &face_b.landmarks, size);
-        self.embedder.verify(&aligned_a, &aligned_b)
+        self.verify_photos_full_opts(
+            image_a,
+            image_b,
+            PipelineOptions {
+                check_liveness,
+                ..Default::default()
+            },
+        )
     }
 }
 
@@ -546,6 +675,19 @@ impl PipelinePool {
             TaskResult::Verify(score) => Ok(score),
             _ => unreachable!(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pipeline_options_defaults() {
+        let opts = PipelineOptions::default();
+        assert!(opts.detect_face);
+        assert!(opts.check_liveness);
+        assert!(opts.apply_mask);
     }
 }
 

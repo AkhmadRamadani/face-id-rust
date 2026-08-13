@@ -19,9 +19,13 @@ struct Args {
     #[arg(long, default_value_t = 8080)]
     port: u16,
 
-    /// Path to YuNet detector .tflite model.
+    /// Path to YuNet / BlazeFace detector .tflite model.
     #[arg(long, default_value = "models/yunet_fp16.tflite")]
     detector: PathBuf,
+
+    /// Path to MediaPipe Face Landmarker .tflite model.
+    #[arg(long)]
+    landmarker: Option<PathBuf>,
 
     /// Path to MiniFASNetV2 anti-spoof .tflite model. Omit to disable liveness check.
     #[arg(long)]
@@ -55,6 +59,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         faceid::Accelerators::GPU | faceid::Accelerators::CPU,
         faceid::BlazeFaceConfig::default(),
     )?;
+
+    let landmarker = if let Some(path) = &args.landmarker {
+        tracing::info!("Loading FaceLandmarker from {:?}", path);
+        Some(faceid::FaceLandmarker::load(
+            path,
+            faceid::Accelerators::GPU | faceid::Accelerators::CPU,
+        )?)
+    } else {
+        tracing::info!("FaceLandmarker disabled (no --landmarker flag provided)");
+        None
+    };
 
     let antispoof = if let Some(path) = &args.antispoof {
         tracing::info!("Loading LivenessDetector from {:?}", path);
@@ -101,7 +116,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         VectorStore::new()
     };
 
-    let pipeline = FacePipeline::new(detector, antispoof, embedder, args.threshold).with_store(store);
+    let pipeline = FacePipeline::new(detector, antispoof, embedder, args.threshold)
+        .with_landmarker(landmarker)
+        .with_store(store);
     let state = AppState::new(pipeline, args.registry.clone(), true);
 
     let app = create_router(state.clone());

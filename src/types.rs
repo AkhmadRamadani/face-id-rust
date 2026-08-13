@@ -98,6 +98,18 @@ impl Landmarks5 {
     }
 }
 
+impl Default for Landmarks5 {
+    fn default() -> Self {
+        Self {
+            left_eye: [0.0, 0.0],
+            right_eye: [0.0, 0.0],
+            nose: [0.0, 0.0],
+            mouth_left: [0.0, 0.0],
+            mouth_right: [0.0, 0.0],
+        }
+    }
+}
+
 /// One detected face, in original-image pixel coordinates.
 #[derive(Debug, Clone)]
 pub struct DetectedFace {

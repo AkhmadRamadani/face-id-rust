@@ -21,6 +21,7 @@ use crate::server::state::AppState;
     components(
         schemas(
             HealthResponse,
+            PipelineQueryParams,
             EnrollRequest,
             EnrollResponse,
             IdentifyRequest,

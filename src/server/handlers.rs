@@ -1,6 +1,6 @@
-use axum::extract::{Multipart, Path, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::Json;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::load_image_from_bytes;
@@ -9,7 +9,7 @@ use crate::recognition::{PersonId, RecognitionContext, RecordId, RegistrationSco
 use crate::server::error::AppError;
 use crate::server::state::AppState;
 
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 use axum::response::Html;
 
@@ -110,6 +110,37 @@ fn parse_bool_str(s: &str) -> bool {
     !matches!(s.trim().to_lowercase().as_str(), "false" | "0" | "inactive" | "no" | "off")
 }
 
+#[derive(Debug, Clone, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PipelineQueryParams {
+    /// Enable face detection ("true"/"false", default: true)
+    pub detect: Option<bool>,
+    /// Alias for detect
+    pub detect_face: Option<bool>,
+    /// Enable anti-spoofing check ("true"/"false", default: true)
+    pub antispoof: Option<bool>,
+    /// Alias for antispoof
+    pub liveness: Option<bool>,
+    /// Enable 36-point MediaPipe face oval contour background mask ("true"/"false", default: true)
+    pub mask: Option<bool>,
+    /// Alias for mask
+    pub apply_mask: Option<bool>,
+}
+
+impl PipelineQueryParams {
+    pub fn get_detect(&self) -> Option<bool> {
+        self.detect.or(self.detect_face)
+    }
+
+    pub fn get_antispoof(&self) -> Option<bool> {
+        self.antispoof.or(self.liveness)
+    }
+
+    pub fn get_mask(&self) -> Option<bool> {
+        self.mask.or(self.apply_mask)
+    }
+}
+
 #[derive(ToSchema)]
 pub struct EnrollRequest {
     /// JPEG/PNG image file containing exactly one face
@@ -121,8 +152,12 @@ pub struct EnrollRequest {
     pub scope: Option<String>,
     /// Free-form display name or note
     pub label: Option<String>,
+    /// Enable face detection ("true"/"false", default: true)
+    pub detect_face: Option<bool>,
     /// Enable anti-spoofing check ("true"/"false", default: true)
     pub antispoof: Option<bool>,
+    /// Enable 36-point MediaPipe face oval contour background mask ("true"/"false", default: true)
+    pub mask: Option<bool>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -137,6 +172,9 @@ pub struct EnrollResponse {
     post,
     path = "/api/v1/enroll",
     tag = "Face Recognition",
+    params(
+        PipelineQueryParams
+    ),
     request_body(content = EnrollRequest, content_type = "multipart/form-data"),
     responses(
         (status = 200, description = "Successfully enrolled face record", body = EnrollResponse),
@@ -146,13 +184,16 @@ pub struct EnrollResponse {
 )]
 pub async fn enroll_face(
     State(state): State<AppState>,
+    Query(query): Query<PipelineQueryParams>,
     mut multipart: Multipart,
 ) -> Result<Json<EnrollResponse>, AppError> {
     let mut photo_bytes: Option<Vec<u8>> = None;
     let mut person_id_raw: Option<String> = None;
     let mut scope_raw: String = "global".to_string();
     let mut label: Option<String> = None;
-    let mut check_liveness: bool = true;
+    let mut detect_face: bool = query.get_detect().unwrap_or(true);
+    let mut check_liveness: bool = query.get_antispoof().unwrap_or(true);
+    let mut apply_mask: bool = query.get_mask().unwrap_or(true);
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         crate::FaceError::Config(format!("Failed to parse multipart field: {e}"))
@@ -183,11 +224,23 @@ pub async fn enroll_face(
                 })?;
                 label = Some(text);
             }
+            "detect" | "detect_face" | "check_detect" => {
+                let text = field.text().await.map_err(|e| {
+                    crate::FaceError::Config(format!("Failed to read detect_face field: {e}"))
+                })?;
+                detect_face = parse_bool_str(&text);
+            }
             "antispoof" | "liveness" | "check_liveness" => {
                 let text = field.text().await.map_err(|e| {
                     crate::FaceError::Config(format!("Failed to read antispoof field: {e}"))
                 })?;
                 check_liveness = parse_bool_str(&text);
+            }
+            "mask" | "apply_mask" | "use_mask" | "mask_face" => {
+                let text = field.text().await.map_err(|e| {
+                    crate::FaceError::Config(format!("Failed to read mask field: {e}"))
+                })?;
+                apply_mask = parse_bool_str(&text);
             }
             _ => {}
         }
@@ -208,14 +261,20 @@ pub async fn enroll_face(
         RegistrationScope::Event(scope_raw.as_str().into())
     };
 
+    let opts = crate::pipeline::PipelineOptions {
+        detect_face,
+        check_liveness,
+        apply_mask,
+    };
+
     let (record_id, total_registrations, record_opt) = {
         let mut guard = state.inner.lock().await;
-        let record_id = guard.pipeline.enroll_opts(
+        let record_id = guard.pipeline.enroll_full_opts(
             &image,
             PersonId::from(person_id_str.as_str()),
             scope.clone(),
             label,
-            check_liveness,
+            opts,
         )?;
         let total = guard.pipeline.store().len();
         let record = guard.pipeline.store().record(record_id).cloned();
@@ -243,8 +302,12 @@ pub struct IdentifyRequest {
     pub event: Option<String>,
     /// Minimum similarity score threshold (optional, default: 0.45)
     pub threshold: Option<f32>,
+    /// Enable face detection ("true"/"false", default: true)
+    pub detect_face: Option<bool>,
     /// Enable anti-spoofing check ("true"/"false", default: true)
     pub antispoof: Option<bool>,
+    /// Enable 36-point MediaPipe face oval contour background mask ("true"/"false", default: true)
+    pub mask: Option<bool>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -266,6 +329,9 @@ pub struct IdentifyResponse {
     post,
     path = "/api/v1/identify",
     tag = "Face Recognition",
+    params(
+        PipelineQueryParams
+    ),
     request_body(content = IdentifyRequest, content_type = "multipart/form-data"),
     responses(
         (status = 200, description = "Identification result", body = IdentifyResponse)
@@ -273,12 +339,15 @@ pub struct IdentifyResponse {
 )]
 pub async fn identify_face(
     State(state): State<AppState>,
+    Query(query): Query<PipelineQueryParams>,
     mut multipart: Multipart,
 ) -> Result<Json<IdentifyResponse>, AppError> {
     let mut photo_bytes: Option<Vec<u8>> = None;
     let mut event_raw: Option<String> = None;
     let mut threshold_raw: Option<f32> = None;
-    let mut check_liveness: bool = true;
+    let mut detect_face: bool = query.get_detect().unwrap_or(true);
+    let mut check_liveness: bool = query.get_antispoof().unwrap_or(true);
+    let mut apply_mask: bool = query.get_mask().unwrap_or(true);
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         crate::FaceError::Config(format!("Failed to parse multipart field: {e}"))
@@ -307,11 +376,23 @@ pub async fn identify_face(
                     threshold_raw = Some(val);
                 }
             }
+            "detect" | "detect_face" | "check_detect" => {
+                let text = field.text().await.map_err(|e| {
+                    crate::FaceError::Config(format!("Failed to read detect_face field: {e}"))
+                })?;
+                detect_face = parse_bool_str(&text);
+            }
             "antispoof" | "liveness" | "check_liveness" => {
                 let text = field.text().await.map_err(|e| {
                     crate::FaceError::Config(format!("Failed to read antispoof field: {e}"))
                 })?;
                 check_liveness = parse_bool_str(&text);
+            }
+            "mask" | "apply_mask" | "use_mask" | "mask_face" => {
+                let text = field.text().await.map_err(|e| {
+                    crate::FaceError::Config(format!("Failed to read mask field: {e}"))
+                })?;
+                apply_mask = parse_bool_str(&text);
             }
             _ => {}
         }
@@ -328,9 +409,15 @@ pub async fn identify_face(
         None => RecognitionContext::GlobalOnly,
     };
 
+    let opts = crate::pipeline::PipelineOptions {
+        detect_face,
+        check_liveness,
+        apply_mask,
+    };
+
     let match_opt = {
         let mut guard = state.inner.lock().await;
-        guard.pipeline.identify_opts(&image, &context, check_liveness)?
+        guard.pipeline.identify_full_opts(&image, &context, opts)?
     };
 
     match match_opt {
@@ -359,8 +446,12 @@ pub struct VerifyRequest {
     /// Second photo file containing a face
     #[schema(value_type = String, format = Binary)]
     pub photo_b: String,
+    /// Enable face detection ("true"/"false", default: true)
+    pub detect_face: Option<bool>,
     /// Enable anti-spoofing check ("true"/"false", default: true)
     pub antispoof: Option<bool>,
+    /// Enable 36-point MediaPipe face oval contour background mask ("true"/"false", default: true)
+    pub mask: Option<bool>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -373,6 +464,9 @@ pub struct VerifyResponse {
     post,
     path = "/api/v1/verify",
     tag = "Face Recognition",
+    params(
+        PipelineQueryParams
+    ),
     request_body(content = VerifyRequest, content_type = "multipart/form-data"),
     responses(
         (status = 200, description = "1:1 verification similarity result", body = VerifyResponse),
@@ -381,11 +475,14 @@ pub struct VerifyResponse {
 )]
 pub async fn verify_photos(
     State(state): State<AppState>,
+    Query(query): Query<PipelineQueryParams>,
     mut multipart: Multipart,
 ) -> Result<Json<VerifyResponse>, AppError> {
     let mut photo_a_bytes: Option<Vec<u8>> = None;
     let mut photo_b_bytes: Option<Vec<u8>> = None;
-    let mut check_liveness: bool = true;
+    let mut detect_face: bool = query.get_detect().unwrap_or(true);
+    let mut check_liveness: bool = query.get_antispoof().unwrap_or(true);
+    let mut apply_mask: bool = query.get_mask().unwrap_or(true);
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         crate::FaceError::Config(format!("Failed to parse multipart field: {e}"))
@@ -404,11 +501,23 @@ pub async fn verify_photos(
                 })?;
                 photo_b_bytes = Some(bytes.to_vec());
             }
+            "detect" | "detect_face" | "check_detect" => {
+                let text = field.text().await.map_err(|e| {
+                    crate::FaceError::Config(format!("Failed to read detect_face field: {e}"))
+                })?;
+                detect_face = parse_bool_str(&text);
+            }
             "antispoof" | "liveness" | "check_liveness" => {
                 let text = field.text().await.map_err(|e| {
                     crate::FaceError::Config(format!("Failed to read antispoof field: {e}"))
                 })?;
                 check_liveness = parse_bool_str(&text);
+            }
+            "mask" | "apply_mask" | "use_mask" | "mask_face" => {
+                let text = field.text().await.map_err(|e| {
+                    crate::FaceError::Config(format!("Failed to read mask field: {e}"))
+                })?;
+                apply_mask = parse_bool_str(&text);
             }
             _ => {}
         }
@@ -424,9 +533,15 @@ pub async fn verify_photos(
     let img_a = load_image_from_bytes(&photo_a_bytes)?;
     let img_b = load_image_from_bytes(&photo_b_bytes)?;
 
+    let opts = crate::pipeline::PipelineOptions {
+        detect_face,
+        check_liveness,
+        apply_mask,
+    };
+
     let similarity = {
         let mut guard = state.inner.lock().await;
-        guard.pipeline.verify_photos_opts(&img_a, &img_b, check_liveness)?
+        guard.pipeline.verify_photos_full_opts(&img_a, &img_b, opts)?
     };
 
     let is_same_person = similarity >= 0.45;
