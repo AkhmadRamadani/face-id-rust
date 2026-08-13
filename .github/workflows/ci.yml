@@ -2,10 +2,10 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, master, dev ]
+    branches: [ main, master, dev, 'feat/*' ]
     tags: [ 'v*' ]
   pull_request:
-    branches: [ main, master, dev ]
+    branches: [ main, master, dev, 'feat/*' ]
 
 permissions:
   contents: read
@@ -45,6 +45,9 @@ jobs:
 
       - name: Run unit tests
         run: cargo test --lib --locked
+
+      - name: Run concurrency stress test
+        run: cargo run --release --example concurrent_test
 
   # ──────────────────────────────────────────────────────────────
   # Job 2: Build & Push Docker Image

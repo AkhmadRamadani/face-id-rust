@@ -29,9 +29,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
-        reservations:
           memory: 512M
+        reservations:
+          memory: 256M
 
 volumes:
   faceid-registry:
