@@ -24,7 +24,7 @@ struct Args {
     detector: PathBuf,
 
     /// Path to MediaPipe Face Landmarker .tflite model.
-    #[arg(long)]
+    #[arg(long, default_value = "models/face_landmark.tflite")]
     landmarker: Option<PathBuf>,
 
     /// Path to MiniFASNetV2 anti-spoof .tflite model. Omit to disable liveness check.
@@ -61,13 +61,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let landmarker = if let Some(path) = &args.landmarker {
-        tracing::info!("Loading FaceLandmarker from {:?}", path);
-        Some(faceid::FaceLandmarker::load(
-            path,
-            faceid::Accelerators::GPU | faceid::Accelerators::CPU,
-        )?)
+        if path.exists() {
+            tracing::info!("Loading FaceLandmarker from {:?}", path);
+            Some(faceid::FaceLandmarker::load(
+                path,
+                faceid::Accelerators::GPU | faceid::Accelerators::CPU,
+            )?)
+        } else {
+            tracing::info!("FaceLandmarker path {:?} not found, skipping", path);
+            None
+        }
     } else {
-        tracing::info!("FaceLandmarker disabled (no --landmarker flag provided)");
+        tracing::info!("FaceLandmarker disabled");
         None
     };
 

@@ -82,9 +82,20 @@ pub struct FacePipeline<E: Embedder, D: Detector = BlazeFaceDetector> {
 
 impl<E: Embedder, D: Detector> FacePipeline<E, D> {
     pub fn new(detector: D, antispoof: Option<LivenessDetector>, embedder: E, similarity_threshold: f32) -> Self {
+        let landmarker_path = std::path::Path::new("models/face_landmark.tflite");
+        let landmarker = if landmarker_path.exists() {
+            FaceLandmarker::load(
+                landmarker_path,
+                litert::Accelerators::GPU | litert::Accelerators::CPU,
+            )
+            .ok()
+        } else {
+            None
+        };
+
         Self {
             detector,
-            landmarker: None,
+            landmarker,
             antispoof,
             embedder,
             store: VectorStore::new(),
