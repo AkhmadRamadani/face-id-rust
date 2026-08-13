@@ -58,7 +58,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let antispoof = if let Some(path) = &args.antispoof {
         tracing::info!("Loading LivenessDetector from {:?}", path);
-        Some(LivenessDetector::load(path, faceid::Accelerators::GPU, AntiSpoofConfig::default())?)
+        Some(LivenessDetector::load(
+            path,
+            faceid::Accelerators::GPU | faceid::Accelerators::CPU,
+            AntiSpoofConfig::default(),
+        )?)
     } else {
         tracing::info!("Anti-spoofing disabled (no --antispoof flag provided)");
         None

@@ -92,7 +92,25 @@ impl LiteRtModel {
 
         let compile_env = Environment::new()?;
         let options = CompilationOptions::new()?.with_accelerators(accelerators)?;
-        let compiled = CompiledModel::new(compile_env, model, &options)?;
+        let compiled = match CompiledModel::new(compile_env, model, &options) {
+            Ok(c) => c,
+            Err(err) => {
+                if accelerators != Accelerators::CPU {
+                    tracing::warn!(
+                        "Failed to compile model {:?} with requested accelerators ({:?}): {}. Falling back to CPU acceleration.",
+                        path.display(),
+                        accelerators,
+                        err
+                    );
+                    let cpu_env = Environment::new()?;
+                    let cpu_model = Model::from_file(&path)?;
+                    let cpu_options = CompilationOptions::new()?.with_accelerators(Accelerators::CPU)?;
+                    CompiledModel::new(cpu_env, cpu_model, &cpu_options)?
+                } else {
+                    return Err(err.into());
+                }
+            }
+        };
 
         Ok(Self {
             _buffer_env: buffer_env,
