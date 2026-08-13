@@ -85,7 +85,7 @@ pub use detector::{DetectorConfig, FaceDetector};
 #[cfg(feature = "litert-runtime")]
 pub use landmarker::{FACEMESH_FACE_OVAL, FaceLandmarker};
 #[cfg(feature = "litert-runtime")]
-pub use pipeline::{load_image, load_image_from_bytes, FacePipeline};
+pub use pipeline::{load_image, load_image_from_bytes, FacePipeline, PipelinePool};
 #[cfg(feature = "litert-runtime")]
 pub use embedder::litert_embedder::LiteRtEmbedder;
 #[cfg(feature = "ort-runtime")]
