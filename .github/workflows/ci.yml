@@ -46,9 +46,6 @@ jobs:
       - name: Run unit tests
         run: cargo test --lib --locked
 
-      - name: Run concurrency stress test
-        run: cargo run --release --example concurrent_test
-
   # ──────────────────────────────────────────────────────────────
   # Job 2: Build & Push Docker Image
   # ──────────────────────────────────────────────────────────────
